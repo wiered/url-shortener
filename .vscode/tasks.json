@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Docker: build image",
+      "detail": "docker build -t url-shortener:latest",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "build",
+        "-t",
+        "url-shortener:latest",
+        "${workspaceFolder}"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: run (with .env)",
+      "detail": ".env + publish 4320 → url-shortener:latest",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "--env-file",
+        "${workspaceFolder}/.env",
+        "-p",
+        "4320:4320",
+        "url-shortener:latest"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

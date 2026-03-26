@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "url-shortener"
+version = "0.1.0"
+description = "Simple URL shortener"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.135.2",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.13.1",
+    "sqlalchemy>=2.0",
+    "uvicorn[standard]==0.42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shortener = ["static/*.css", "templates/*.html"]

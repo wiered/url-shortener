@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>URL Shortener</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <span class="dot" aria-hidden="true"></span>
+        <div>
+          <h1>URL Shortener</h1>
+          <div class="sub">Сокращение ссылок, поиск и последние записи</div>
+        </div>
+      </header>
+
+      <section
+        class="card search-top"
+        id="search-top"
+        aria-label="Поиск по сохранённым ссылкам"
+      >
+        <h2 class="section-title">Поиск по сохранённым ссылкам</h2>
+        <p class="search-hint">
+          По <strong>коду</strong>, <strong>полному URL</strong> или
+          <strong>названию страницы</strong>. Нажмите на
+          <strong>строку поиска</strong> ниже — результаты выпадут вниз. Введите
+          запрос — поиск выполнится автоматически.
+        </p>
+        <label class="visually-hidden" for="search-input">Строка поиска</label>
+        <div class="search-row">
+          <input
+            class="input search-input-large"
+            id="search-input"
+            type="search"
+            autocomplete="off"
+            placeholder="Например youtu, код ссылки или часть адреса…"
+          />
+        </div>
+
+        <div id="search-dropdown" class="search-dropdown" hidden>
+          <div class="search-dropdown-inner">
+            <div
+              id="search-status-d"
+              class="msg search-status"
+              hidden
+              role="status"
+              aria-live="polite"
+            ></div>
+            <div
+              id="search-dropdown-meta"
+              class="search-meta search-dropdown-meta"
+              hidden
+            >
+              <span class="search-spinner-slot" aria-hidden="true">
+                <span id="search-spinner" class="search-spinner" hidden></span>
+              </span>
+              <span id="search-query-label-d"></span>
+              <span id="search-count-d" class="search-count"></span>
+            </div>
+            <div class="summary table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Имя</th>
+                    <th>Код</th>
+                    <th>Полная ссылка</th>
+                    <th>Дата и время</th>
+                  </tr>
+                </thead>
+                <tbody id="search-tbody"></tbody>
+              </table>
+            </div>
+            <p id="search-empty" class="msg" hidden></p>
+          </div>
+        </div>
+      </section>
+
+      <div id="main-panel" class="cards cards-main">
+        <div class="card card-shorten">
+          <h2 class="section-title">Новая ссылка</h2>
+          <form id="shorten-form">
+            <div class="field">
+              <label for="url-input">Полный URL</label>
+              <input
+                class="input"
+                id="url-input"
+                name="url"
+                type="url"
+                required
+                placeholder="https://example.com/..."
+                autocomplete="url"
+              />
+            </div>
+            <div class="field">
+              <label for="title-input">Название (необязательно)</label>
+              <input
+                class="input"
+                id="title-input"
+                name="title"
+                type="text"
+                placeholder="Как во вкладке браузера"
+              />
+            </div>
+            <div class="row">
+              <button class="btn" type="submit">Сократить</button>
+            </div>
+          </form>
+          <div id="shorten-msg" class="msg" hidden></div>
+        </div>
+
+        <div class="card card-table-wide">
+          <h2 class="section-title">Последние ссылки</h2>
+          <div class="summary table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>Код</th>
+                  <th>Полная ссылка</th>
+                  <th>Дата и время</th>
+                </tr>
+              </thead>
+              <tbody id="recent-tbody"></tbody>
+            </table>
+          </div>
+          <p id="recent-empty" class="msg" hidden>Пока нет ссылок.</p>
+        </div>
+      </div>
+
+      <footer>
+        Сокращённые ссылки: <code>/r/код</code> · клик по коду копирует полную
+        короткую ссылку (этот сайт + <code>/r/код</code>)
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      const recentTbody = document.getElementById("recent-tbody");
+      const recentEmpty = document.getElementById("recent-empty");
+      const searchTbody = document.getElementById("search-tbody");
+      const searchEmpty = document.getElementById("search-empty");
+      const searchInput = document.getElementById("search-input");
+      const searchTop = document.getElementById("search-top");
+      const searchDropdown = document.getElementById("search-dropdown");
+      const searchStatusD = document.getElementById("search-status-d");
+      const searchDropdownMeta = document.getElementById(
+        "search-dropdown-meta",
+      );
+      const searchQueryLabelD = document.getElementById("search-query-label-d");
+      const searchCountD = document.getElementById("search-count-d");
+      const searchSpinner = document.getElementById("search-spinner");
+      const shortenMsg = document.getElementById("shorten-msg");
+      const toastEl = document.getElementById("toast");
+
+      const RECENT_CACHE_KEY = "recent_links_v1";
+      let recentCache10 = null;
+
+      let searchGeneration = 0;
+      let searchTimer = null;
+      const DEBOUNCE_MS = 240;
+      const DROPDOWN_FADE_MS = 480;
+
+      function showToast(text) {
+        toastEl.textContent = text;
+        toastEl.classList.add("show");
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => toastEl.classList.remove("show"), 2000);
+      }
+
+      function formatDt(iso) {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return iso;
+        return d.toLocaleString();
+      }
+
+      function truncateUrl(url, maxLen) {
+        const m = maxLen === undefined ? 52 : maxLen;
+        if (!url || url.length <= m) return url;
+        return url.slice(0, m - 3) + "...";
+      }
+
+      function shortUrlForCode(code) {
+        return `${window.location.origin}/r/${code}`;
+      }
+
+      function copyShortUrl(code) {
+        const text = shortUrlForCode(code);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(
+            () => showToast("Ссылка скопирована"),
+            () => fallbackCopy(text),
+          );
+        } else {
+          fallbackCopy(text);
+        }
+      }
+
+      function fallbackCopy(text) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand("copy");
+          showToast("Ссылка скопирована");
+        } catch {
+          showToast("Не удалось скопировать");
+        }
+        document.body.removeChild(ta);
+      }
+
+      function appendRow(tbody, row) {
+        const tr = document.createElement("tr");
+
+        const tdName = document.createElement("td");
+        tdName.textContent = row.name || "—";
+
+        const tdCode = document.createElement("td");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "code-copy";
+        btn.textContent = row.code;
+        btn.title =
+          "Нажмите, чтобы скопировать короткую ссылку (адрес сайта + /r/код)";
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          copyShortUrl(row.code);
+        });
+        tdCode.appendChild(btn);
+
+        const tdUrl = document.createElement("td");
+        const a = document.createElement("a");
+        a.href = row.url;
+        a.className = "link-url";
+        a.textContent = truncateUrl(row.url);
+        a.title = row.url;
+        tdUrl.appendChild(a);
+
+        const tdDt = document.createElement("td");
+        tdDt.textContent = formatDt(row.created_at);
+
+        tr.append(tdName, tdCode, tdUrl, tdDt);
+        tbody.appendChild(tr);
+      }
+
+      function renderTable(tbody, rows, emptyEl, emptyText) {
+        tbody.replaceChildren();
+        if (!rows.length) {
+          emptyEl.textContent = emptyText || "Ничего не найдено.";
+          emptyEl.hidden = false;
+          return;
+        }
+        emptyEl.hidden = true;
+        rows.forEach((r) => appendRow(tbody, r));
+      }
+
+      function _readRecentCache() {
+        try {
+          const raw = sessionStorage.getItem(RECENT_CACHE_KEY);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      }
+
+      function _writeRecentCache(rows) {
+        recentCache10 = rows;
+        try {
+          sessionStorage.setItem(RECENT_CACHE_KEY, JSON.stringify(rows));
+        } catch {
+          // ignore
+        }
+      }
+
+      function renderRecentFromCache() {
+        const rows = recentCache10 || _readRecentCache() || [];
+        recentCache10 = rows;
+        renderTable(recentTbody, rows.slice(0, 5), recentEmpty, "Пока нет ссылок.");
+      }
+
+      async function refreshRecentCache10() {
+        const r = await fetch("/links/recent?limit=10");
+        if (!r.ok) return;
+        const data = await r.json();
+        _writeRecentCache(data);
+      }
+
+      async function loadRecent() {
+        await refreshRecentCache10();
+        renderRecentFromCache();
+      }
+
+      function openSearchDropdown() {
+        if (
+          !searchDropdown.hasAttribute("hidden") &&
+          searchDropdown.classList.contains("is-open")
+        )
+          return;
+        searchDropdown.removeAttribute("hidden");
+        searchTop.classList.add("search-open");
+        requestAnimationFrame(() => {
+          searchDropdown.classList.add("is-open");
+        });
+      }
+
+      function closeSearchDropdown() {
+        if (!searchDropdown.classList.contains("is-open")) {
+          searchDropdown.setAttribute("hidden", "");
+          searchTop.classList.remove("search-open");
+          return;
+        }
+        searchDropdown.classList.remove("is-open");
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          searchDropdown.setAttribute("hidden", "");
+          searchTop.classList.remove("search-open");
+        };
+        searchDropdown.addEventListener(
+          "transitionend",
+          (e) => {
+            if (e.propertyName === "opacity") finish();
+          },
+          { once: true },
+        );
+        setTimeout(finish, DROPDOWN_FADE_MS + 120);
+      }
+
+      function closeSearchDropdownImmediate() {
+        searchDropdown.classList.remove("is-open");
+        searchDropdown.setAttribute("hidden", "");
+        searchTop.classList.remove("search-open");
+      }
+
+      async function runSearchQuery(q, myGen) {
+        searchStatusD.hidden = true;
+        searchStatusD.classList.remove("err");
+        searchEmpty.hidden = true;
+        searchTbody.replaceChildren();
+
+        searchQueryLabelD.textContent = "Запрос:";
+        searchCountD.textContent = ` «${q}» · найдено: …`;
+        searchDropdownMeta.hidden = false;
+        searchSpinner.hidden = false;
+
+        try {
+          const r = await fetch("/links/search?q=" + encodeURIComponent(q));
+          if (myGen !== searchGeneration) return;
+          if (!r.ok) {
+            searchSpinner.hidden = true;
+            searchStatusD.textContent =
+              "Не удалось выполнить поиск. Попробуйте ещё раз.";
+            searchStatusD.classList.add("err");
+            searchStatusD.hidden = false;
+            return;
+          }
+          const data = await r.json();
+          if (myGen !== searchGeneration) return;
+          searchSpinner.hidden = true;
+          searchQueryLabelD.textContent = "Запрос:";
+          searchCountD.textContent = ` «${q}» · найдено: ${data.length}`;
+          searchDropdownMeta.hidden = false;
+          const emptyMsg = `Ничего не найдено по запросу «${q}».`;
+          renderTable(searchTbody, data, searchEmpty, emptyMsg);
+        } catch {
+          if (myGen !== searchGeneration) return;
+          searchSpinner.hidden = true;
+          searchStatusD.textContent = "Ошибка сети при поиске.";
+          searchStatusD.classList.add("err");
+          searchStatusD.hidden = false;
+        }
+      }
+
+      function showRecentInDropdownFromCache() {
+        const rows = recentCache10 || _readRecentCache() || [];
+        recentCache10 = rows;
+        searchStatusD.hidden = true;
+        searchDropdownMeta.hidden = true;
+        searchSpinner.hidden = true;
+        const emptyMsg = "Пока нет ссылок.";
+        renderTable(searchTbody, rows.slice(0, 5), searchEmpty, emptyMsg);
+      }
+
+      async function showRecentInDropdown(myGen) {
+        // мгновенный показ из кэша (если есть)
+        showRecentInDropdownFromCache();
+
+        searchStatusD.hidden = true;
+        searchStatusD.classList.remove("err");
+        searchSpinner.hidden = false;
+        searchEmpty.hidden = true;
+        searchDropdownMeta.hidden = true;
+
+        try {
+          const r = await fetch("/links/recent?limit=10");
+          if (myGen !== searchGeneration) return;
+          if (!r.ok) {
+            searchSpinner.hidden = true;
+            searchStatusD.textContent = "Не удалось загрузить данные.";
+            searchStatusD.classList.add("err");
+            searchStatusD.hidden = false;
+            return;
+          }
+          const data = await r.json();
+          if (myGen !== searchGeneration) return;
+          searchSpinner.hidden = true;
+          _writeRecentCache(data);
+          showRecentInDropdownFromCache();
+        } catch {
+          if (myGen !== searchGeneration) return;
+          searchSpinner.hidden = true;
+          searchStatusD.textContent = "Ошибка сети.";
+          searchStatusD.classList.add("err");
+          searchStatusD.hidden = false;
+        }
+      }
+
+      function scheduleSearch() {
+        clearTimeout(searchTimer);
+        openSearchDropdown();
+
+        const q = searchInput.value.trim();
+        searchGeneration += 1;
+        const myGen = searchGeneration;
+
+        if (!q.length) {
+          showRecentInDropdown(myGen);
+          return;
+        }
+
+        searchTimer = setTimeout(() => {
+          if (myGen !== searchGeneration) return;
+          runSearchQuery(q, myGen);
+        }, DEBOUNCE_MS);
+      }
+
+      searchInput.addEventListener("focus", () => {
+        openSearchDropdown();
+        searchGeneration += 1;
+        showRecentInDropdown(searchGeneration);
+      });
+      searchInput.addEventListener("click", () => {
+        openSearchDropdown();
+        if (!searchInput.value.trim()) {
+          searchGeneration += 1;
+          showRecentInDropdown(searchGeneration);
+        }
+      });
+      searchInput.addEventListener("input", scheduleSearch);
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeSearchDropdown();
+      });
+
+      document.addEventListener(
+        "click",
+        (e) => {
+          if (!searchDropdown.classList.contains("is-open")) return;
+          const target = e.target;
+          if (!target || !target.closest) return;
+          if (target.closest("#search-input")) return;
+          if (target.closest("#search-dropdown")) return;
+          closeSearchDropdownImmediate();
+        },
+        true,
+      );
+
+      document
+        .getElementById("shorten-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          shortenMsg.hidden = true;
+          const url = document.getElementById("url-input").value.trim();
+          const titleRaw = document.getElementById("title-input").value.trim();
+          const body = { url };
+          if (titleRaw) body.title = titleRaw;
+          try {
+            const r = await fetch("/shorten", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) {
+              let err = "Ошибка при сохранении";
+              if (typeof data.detail === "string") err = data.detail;
+              else if (Array.isArray(data.detail))
+                err = data.detail
+                  .map((x) => (x.msg ? x.msg : JSON.stringify(x)))
+                  .join("; ");
+              shortenMsg.textContent = err;
+              shortenMsg.classList.add("err");
+              shortenMsg.hidden = false;
+              return;
+            }
+            shortenMsg.classList.remove("err");
+            const fullShort = shortUrlForCode(data.code);
+            shortenMsg.replaceChildren();
+            const ok = document.createElement("span");
+            ok.textContent = "Готово. Короткая ссылка: ";
+            const la = document.createElement("a");
+            la.href = fullShort;
+            la.textContent = fullShort;
+            shortenMsg.append(ok, la);
+            shortenMsg.hidden = false;
+            document.getElementById("url-input").value = "";
+            document.getElementById("title-input").value = "";
+            await refreshRecentCache10();
+            renderRecentFromCache();
+          } catch {
+            shortenMsg.textContent = "Сеть недоступна";
+            shortenMsg.classList.add("err");
+            shortenMsg.hidden = false;
+          }
+        });
+
+      // Быстро: рисуем из кэша, затем обновляем с сервера.
+      renderRecentFromCache();
+      refreshRecentCache10().then(renderRecentFromCache);
+    </script>
+  </body>
+</html>
